@@ -2,12 +2,16 @@
 /*
 Plugin Name: WooCommerce to ActiveCampaign List Sync
 Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
-Version: 1.0
+Version: 1.0.10
 Author: Micheal Colhoun 
 */
 
 // Prevent direct file access
 defined('ABSPATH') || exit;
+// Add after defined('ABSPATH') || exit;
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 
 class WooToAC_Plugin
 {
@@ -27,7 +31,11 @@ class WooToAC_Plugin
     {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
-        add_action('woocommerce_payment_complete', [$this, 'handle_order_complete']);
+        // Add this to the constructor
+        add_action('woo_to_ac_process_order', [$this, 'process_order']);
+
+        add_action('woocommerce_payment_complete_order_status', [$this, 'handle_order_complete'], 10, 2);
+        //add_action('woocommerce_payment_complete', [$this, 'handle_order_complete']);
 
         // Add AJAX handlers for admin
         add_action('wp_ajax_test_ac_connection', [$this, 'test_connection']);
@@ -290,27 +298,66 @@ class WooToAC_Plugin
 
         return $lists;
     }
-
-    // This is our entry point
-    public function handle_order_complete($order_id)
+    public function handle_order_complete($order_status, $order_id)
     {
-        try {
-            if (!$this->validate_settings()) {
-                return;
-            }
+        // Only process successful orders
+        if ($order_status !== 'completed' && $order_status !== 'processing') {
+            $this->log("Order {$order_id} status is {$order_status} - not processing", true);
+            return $order_status;
+        }
     
+        $order = wc_get_order($order_id);
+        if (!$order || $order->get_payment_method() === 'stripe' && !$order->is_paid()) {
+            $this->log("Order {$order_id} is not paid - not processing", true);
+            return $order_status;
+        }
+    
+        $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
+        wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
+    
+        return $order_status;
+    }
+
+
+    // Move all our processing code to this new function
+    public function process_order($order_id)
+    {
+
+        try {
+            $settings = get_option('woo_to_ac_settings');
+            $this->log("Current settings: " . wp_json_encode([
+                'has_url' => !empty($settings['api_url']),
+                'has_key' => !empty($settings['api_key']),
+                'list_id' => $settings['list_id']
+            ]), true);
+
             $contact_data = $this->get_contact_data_from_order($order_id);
             $this->log("Got contact data: " . wp_json_encode($contact_data), true);
-            
-            $contact_id = $this->ensure_contact_exists($contact_data);
+
+            // Here's where we were missing the actual contact ID retrieval
+            $contact_id = $this->find_existing_contact($contact_data['email']);
+
+            if ($contact_id) {
+                $this->log("Using existing contact ID: " . $contact_id, true);
+                // Update the contact info
+                $this->update_contact($contact_id, $contact_data);
+            } else {
+                $contact_id = $this->create_new_contact($contact_data);
+                $this->log("Created new contact with ID: " . $contact_id, true);
+            }
+
+            $this->log("about to add contact to list", true);
+
             if ($contact_id) {
                 $this->add_contact_to_list($contact_id, $contact_data['email']);
             } else {
-                $this->log("Failed to ensure contact exists");
+                $this->log("No contact ID available to add to list");
             }
-            
+            $this->log("added contact to list", true);
+
+
         } catch (Exception $e) {
-            $this->log("Error in handle_order_complete: " . $e->getMessage());
+            $this->log("Error in handle_order_complete: " . $e->getMessage(), true);
         }
     }
 
@@ -416,48 +463,63 @@ class WooToAC_Plugin
     }
 
     private function add_contact_to_list($contact_id, $email)
-{
-    $settings = get_option('woo_to_ac_settings');
-    $list_data = [
-        'contactList' => [
-            'list' => $settings['list_id'],
-            'contact' => $contact_id,
-            'status' => 1
-        ]
-    ];
+    {
+        $this->log("Starting add_contact_to_list function", true);
 
-    $this->log("List data for API: " . wp_json_encode($list_data), true);
-    $this->log("List API URL: " . $settings['api_url'] . '/api/3/contactLists', true);
+        $settings = get_option('woo_to_ac_settings');
 
-    $response = wp_remote_post(
-        $settings['api_url'] . '/api/3/contactLists',
-        [
+        $this->log("settings get_option: woo_to_ac_settings", true);
+
+        $list_data = [
+            'contactList' => [
+                'list' => $settings['list_id'],
+                'contact' => $contact_id,
+                'status' => 1
+            ]
+        ];
+        $this->log("List data prepared: " . wp_json_encode($list_data), true);
+
+        $args = [
+            'timeout' => 30,  // Increase timeout to 30 seconds
             'headers' => [
                 'Api-Token' => $settings['api_key'],
                 'Content-Type' => 'application/json'
             ],
             'body' => json_encode($list_data)
-        ]
-    );
+        ];
 
-    $response_body = json_decode(wp_remote_retrieve_body($response), true);
-    $response_code = wp_remote_retrieve_response_code($response);
-    
-    $this->log("List add response code: " . $response_code, true);
-    $this->log("List add response: " . wp_json_encode($response_body), true);
 
-    if (is_wp_error($response)) {
-        $this->log("Failed to add contact to list: " . $response->get_error_message());
-        return;
+        $this->log("About to make API call", true);
+
+        try {
+            $response = wp_remote_post(
+                $settings['api_url'] . '/api/3/contactLists',
+                $args
+            );
+
+            $this->log("API call completed", true);
+
+            if (is_wp_error($response)) {
+                $this->log("API call failed: " . $response->get_error_message(), true);
+                return;
+            }
+
+            $response_code = wp_remote_retrieve_response_code($response);
+            $response_body = wp_remote_retrieve_body($response);
+
+            $this->log("Response code: " . $response_code, true);
+            $this->log("Response body: " . $response_body, true);
+
+            if ($response_code !== 200 && $response_code !== 201) {
+                $this->log("Unexpected response code: " . $response_code, true);
+                return;
+            }
+
+            $this->log("Successfully added {$email} to list", true);
+        } catch (Exception $e) {
+            $this->log("Exception in add_contact_to_list: " . $e->getMessage(), true);
+        }
     }
-
-    if ($response_code !== 200 && $response_code !== 201) {
-        $this->log("Failed to add contact to list. Status code: " . $response_code);
-        return;
-    }
-
-    $this->log("Successfully added {$email} to list {$settings['list_id']}", true);
-}
 
     // Modify the log function to use verbose setting
     private function log($message, $verbose = false)
