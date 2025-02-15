@@ -294,91 +294,119 @@ class WooToAC_Plugin
     // This is our entry point
     public function handle_order_complete($order_id)
     {
-        $settings = get_option('woo_to_ac_settings');
+        try {
+            if (!$this->validate_settings()) {
+                return;
+            }
+        } catch (Exception $e) {
+            $this->log("Error in handle_order_complete: " . $e->getMessage());
+        }
+    }
 
+    private function validate_settings()
+    {
+        $settings = get_option('woo_to_ac_settings');
         if (empty($settings['api_url']) || empty($settings['api_key']) || empty($settings['list_id'])) {
             $this->log("Missing configuration settings");
-            return;
+            return false;
+        }
+        return true;
+    }
+
+    private function get_contact_data_from_order($order_id)
+    {
+        $order = wc_get_order($order_id);
+        return [
+            'email' => $order->get_billing_email(),
+            'firstName' => $order->get_billing_first_name(),
+            'lastName' => $order->get_billing_last_name()
+        ];
+    }
+
+    private function ensure_contact_exists($contact_data)
+    {
+        $contact_id = $this->find_existing_contact($contact_data['email']);
+
+        if ($contact_id) {
+            return $this->update_contact($contact_id, $contact_data);
         }
 
-        $order = wc_get_order($order_id);
-        $email = $order->get_billing_email();
-        $first_name = $order->get_billing_first_name();
-        $last_name = $order->get_billing_last_name();
+        return $this->create_new_contact($contact_data);
+    }
 
-        $data = [
-            'contact' => [
-                'email' => $email,
-                'firstName' => $first_name,
-                'lastName' => $last_name
-            ]
-        ];
+    private function find_existing_contact($email)
+    {
+        $settings = get_option('woo_to_ac_settings');
+        $search_response = wp_remote_get(
+            $settings['api_url'] . '/api/3/contacts?' . http_build_query(['email' => $email]),
+            ['headers' => ['Api-Token' => $settings['api_key']]]
+        );
 
-        $this->log("Attempting to create contact with data: " . wp_json_encode($data), true);
-
-
-        // First try to find existing contact
-        $email = $order->get_billing_email();
-        $search_response = wp_remote_get($settings['api_url'] . '/api/3/contacts?' . http_build_query(['email' => $email]), [
-            'headers' => [
-                'Api-Token' => $settings['api_key']
-            ]
-        ]);
-
-        $contact_id = null;
         $search_body = json_decode(wp_remote_retrieve_body($search_response), true);
+        $this->log("Search response: " . wp_json_encode($search_body), true);
 
-        if (!is_wp_error($search_response) && isset($search_body['contacts']) && !empty($search_body['contacts'])) {
-            // Contact exists, get their ID
-
+        if (!is_wp_error($search_response) && isset($search_body['contacts'][0]['id'])) {
             $contact_id = $search_body['contacts'][0]['id'];
             $this->log("Found existing contact with ID: " . $contact_id, true);
-            
-            // Update existing contact
-            $update_response = wp_remote_put($settings['api_url'] . '/api/3/contacts/' . $contact_id, [
+            return $contact_id;
+        }
+
+        return null;
+    }
+    private function update_contact($contact_id, $contact_data)
+    {
+        $settings = get_option('woo_to_ac_settings');
+        $update_response = wp_remote_put(
+            $settings['api_url'] . '/api/3/contacts/' . $contact_id,
+            [
                 'headers' => [
                     'Api-Token' => $settings['api_key'],
                     'Content-Type' => 'application/json'
                 ],
-                'body' => json_encode($data)
-            ]);
-            
-            if (is_wp_error($update_response)) {
-                $this->log("Failed to update contact: " . $update_response->get_error_message());
-                return;
-            }
-            
-        } else {
+                'body' => json_encode(['contact' => $contact_data])
+            ]
+        );
 
-            // Create new contact
-            $create_response = wp_remote_post($settings['api_url'] . '/api/3/contacts', [
+        if (is_wp_error($update_response)) {
+            $this->log("Failed to update contact: " . $update_response->get_error_message());
+            return null;
+        }
+
+        return $contact_id;
+    }
+
+    private function create_new_contact($contact_data)
+    {
+        $settings = get_option('woo_to_ac_settings');
+        $create_response = wp_remote_post(
+            $settings['api_url'] . '/api/3/contacts',
+            [
                 'headers' => [
                     'Api-Token' => $settings['api_key'],
                     'Content-Type' => 'application/json'
                 ],
-                'body' => json_encode($data)
-            ]);
+                'body' => json_encode(['contact' => $contact_data])
+            ]
+        );
 
-            if (is_wp_error($create_response)) {
-                $this->log("Failed to create contact: " . $create_response->get_error_message());
-                return;
-            }
-
-            $create_body = json_decode(wp_remote_retrieve_body($create_response), true);
-            if (isset($create_body['contact']['id'])) {
-                $contact_id = $create_body['contact']['id'];
-                $this->log("Created new contact with ID: " . $contact_id, true);
-            }
+        if (is_wp_error($create_response)) {
+            $this->log("Failed to create contact: " . $create_response->get_error_message());
+            return null;
         }
-        
-        if (!$contact_id) {
-            $this->log("Failed to get contact ID");
-            return;
-        }
-        // we should have a contact now
-        $this->log("Great, we have a contact: " . $contact_id, true);
 
-        // Then add to list
+        $create_body = json_decode(wp_remote_retrieve_body($create_response), true);
+        if (isset($create_body['contact']['id'])) {
+            $contact_id = $create_body['contact']['id'];
+            $this->log("Created new contact with ID: " . $contact_id, true);
+            return $contact_id;
+        }
+
+        return null;
+    }
+
+    private function add_contact_to_list($contact_id, $email)
+    {
+        $settings = get_option('woo_to_ac_settings');
         $list_data = [
             'contactList' => [
                 'list' => $settings['list_id'],
@@ -387,13 +415,18 @@ class WooToAC_Plugin
             ]
         ];
 
-        $response = wp_remote_post($settings['api_url'] . '/api/3/contactLists', [
-            'headers' => [
-                'Api-Token' => $settings['api_key'],
-                'Content-Type' => 'application/json'
-            ],
-            'body' => json_encode($list_data)
-        ]);
+        $this->log("Attempting to add to list with data: " . wp_json_encode($list_data), true);
+
+        $response = wp_remote_post(
+            $settings['api_url'] . '/api/3/contactLists',
+            [
+                'headers' => [
+                    'Api-Token' => $settings['api_key'],
+                    'Content-Type' => 'application/json'
+                ],
+                'body' => json_encode($list_data)
+            ]
+        );
 
         if (is_wp_error($response)) {
             $this->log("Failed to add contact to list: " . $response->get_error_message());
@@ -402,7 +435,6 @@ class WooToAC_Plugin
 
         $this->log("Successfully added {$email} to list");
     }
-
 
     // Modify the log function to use verbose setting
     private function log($message, $verbose = false)
