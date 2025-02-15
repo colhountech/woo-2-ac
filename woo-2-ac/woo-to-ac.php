@@ -370,16 +370,19 @@ class WooToAC_Plugin
                 $this->log("Created new contact with ID: " . $contact_id, true);
             }
         }
+        
         if (!$contact_id) {
             $this->log("Failed to get contact ID");
             return;
         }
+        // we should have a contact now
+        $this->log("Great, we have a contact: " . $contact_id, true);
 
         // Then add to list
         $list_data = [
             'contactList' => [
                 'list' => $settings['list_id'],
-                'contact' => $create_body['contact']['id'],
+                'contact' => $contact_id,
                 'status' => 1
             ]
         ];
