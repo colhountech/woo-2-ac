@@ -75,6 +75,15 @@ class WooToAC_Plugin {
             'woo-to-ac',
             'woo_to_ac_main'
         );
+
+        
+        add_settings_field(
+            'verbose_logging',
+            'Verbose Logging',
+            [$this, 'render_verbose_logging_field'],
+            'woo-to-ac',
+            'woo_to_ac_main'
+        );
     }
 
     public function render_settings_page() {
@@ -136,12 +145,17 @@ class WooToAC_Plugin {
                         }, function(listsResponse) {
                             if (listsResponse.success) {
                                 var select = $('#ac_list_id');
+                                var currentValue = select.val();
                                 select.empty();
                                 $.each(listsResponse.data, function(id, name) {
-                                    select.append($('<option>', {
+                                    var option = $('<option>', {
                                         value: id,
                                         text: name
-                                    }));
+                                    });
+                                    if (id === currentValue) {
+                                        option.prop('selected', true);
+                                    }
+                                    select.append(option);
                                 });
                             }
                         });
@@ -186,11 +200,28 @@ class WooToAC_Plugin {
                 $lists = $this->get_ac_lists();
                 foreach ($lists as $id => $name) {
                     $selected = ($this->settings['list_id'] ?? '') == $id ? 'selected' : '';
-                    echo "<option value='{$id}' {$selected}>{$name}</option>";
+                    //echo "<option value='{$id}' {$selected}>{$name}</option>";
+                    printf(
+                        '<option value="%s" %s>%s</option>',
+                        esc_attr($id),
+                        selected($this->settings['list_id'], $id, false),
+                        esc_html($name)
+                    );
                 }
             }
             ?>
         </select>
+        <?php
+    }
+
+    public function render_verbose_logging_field() {
+        ?>
+        <input type="checkbox" 
+               id="verbose_logging" 
+               name="woo_to_ac_settings[verbose_logging]" 
+               value="1" 
+               <?php checked(($this->settings['verbose_logging'] ?? false), 1); ?>>
+        <label for="verbose_logging">Enable detailed logging for debugging</label>
         <?php
     }
 
@@ -281,6 +312,8 @@ class WooToAC_Plugin {
             ]
         ];
 
+        $this->log("Attempting to create contact with data: " . wp_json_encode($data), true);
+
         // First create/update the contact
         $response = wp_remote_post($settings['api_url'] . '/api/3/contacts', [
             'headers' => [
@@ -298,7 +331,7 @@ class WooToAC_Plugin {
         $body = json_decode(wp_remote_retrieve_body($response), true);
         
         if (!isset($body['contact']['id'])) {
-            $this->log("Failed to get contact ID from response");
+            $this->log("Failed to get contact ID from response. Response: " . wp_json_encode($body), true);
             return;
         }
 
@@ -327,7 +360,13 @@ class WooToAC_Plugin {
         $this->log("Successfully added {$email} to list");
     }
 
-    private function log($message) {
+    // Modify the log function to use verbose setting
+    private function log($message, $verbose = false) {
+        $settings = get_option('woo_to_ac_settings');
+        if ($verbose && empty($settings['verbose_logging'])) {
+            return;
+        }
+
         $logs = get_option('woo_to_ac_logs', []);
         array_unshift($logs, [
             'time' => current_time('mysql'),
@@ -339,6 +378,7 @@ class WooToAC_Plugin {
         
         update_option('woo_to_ac_logs', $logs);
     }
+
 
     private function display_logs() {
         $logs = get_option('woo_to_ac_logs', []);
