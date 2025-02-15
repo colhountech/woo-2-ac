@@ -4,7 +4,7 @@
  * Plugin Name: WooCommerce to ActiveCampaign List Sync
  * Plugin URI: 
  * Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
- * Version: 1.0.15
+ * Version: 1.0.17
  * Author: Micheal Colhoun
  * Author URI: https://github.com/colhountech/wordpress/
  * Text Domain: woo-to-ac
@@ -310,17 +310,14 @@ class WooToAC_Plugin
     }
     public function handle_order_status_change($order_id, $old_status, $new_status, $order)
     {
-        $this->log("Order status changed: Order {$order_id} from {$old_status} to {$new_status}", true);
-
-        // Add check to prevent duplicate processing
         $processed = get_post_meta($order_id, '_ac_sync_processed', true);
         if ($processed) {
-            $this->log("Order {$order_id} already processed for ActiveCampaign", true);
+            $this->log("Order {$order_id} already processed", true);
             return;
         }
 
         if ($new_status === 'processing' || $new_status === 'completed') {
-            $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
+            $this->log("Scheduling sync for order {$order_id}");
             wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
         }
     }
@@ -328,47 +325,27 @@ class WooToAC_Plugin
 
     public function process_order($order_id)
     {
-        $this->log("=== PROCESS ORDER START ===", true);
-        $this->log("Processing order ID: " . $order_id, true);
+        $this->log("Processing order: {$order_id}");
 
         try {
-            $settings = get_option('woo_to_ac_settings');
-            $this->log("Settings check - Has URL: " . (!empty($settings['api_url'])), true);
-            $this->log("Settings check - Has Key: " . (!empty($settings['api_key'])), true);
-            $this->log("Settings check - List ID: " . $settings['list_id'], true);
-
             if (!$this->validate_settings()) {
-                $this->log("!!! Settings validation failed", true);
+                $this->log("Settings validation failed - sync aborted");
                 return;
             }
-            $this->log("Settings validated successfully", true);
 
             $contact_data = $this->get_contact_data_from_order($order_id);
-            $this->log("Contact data retrieved: " . wp_json_encode($contact_data), true);
-
             $contact_id = $this->find_existing_contact($contact_data['email']);
-            $this->log("Contact lookup complete", true);
 
-             if ($contact_id) {
-            //     $this->log("=== STARTING CONTACT UPDATE ===", true);
-            //     $update_result = $this->update_contact($contact_id, $contact_data);
-            //     $this->log("Contact update complete. Result: " . ($update_result ? "success" : "failed"), true);
-
-                $this->log("=== STARTING LIST ADDITION ===", true);
+            if ($contact_id) {
                 $this->add_contact_to_list($contact_id, $contact_data['email']);
-                $this->log("=== LIST ADDITION COMPLETE ===", true);
-
                 update_post_meta($order_id, '_ac_sync_processed', true);
-                $this->log("Order marked as processed", true);
+                $this->log("Order {$order_id} synced successfully");
             } else {
-                $this->log("!!! No contact ID found for email: " . $contact_data['email'], true);
+                $this->log("No contact found for email: {$contact_data['email']}", true);
             }
 
-            $this->log("=== PROCESS ORDER COMPLETE ===", true);
-
         } catch (Exception $e) {
-            $this->log("!!! ERROR in process_order: " . $e->getMessage(), true);
-            $this->log("Error stack trace: " . $e->getTraceAsString(), true);
+            $this->log("Error processing order: " . $e->getMessage());
         }
     }
 
@@ -376,14 +353,10 @@ class WooToAC_Plugin
     private function validate_settings()
     {
         $settings = get_option('woo_to_ac_settings');
-        $this->log("Validating settings:", true);
-        $this->log("API URL exists: " . (!empty($settings['api_url'])), true);
-        $this->log("API Key exists: " . (!empty($settings['api_key'])), true);
-        $this->log("List ID exists: " . (!empty($settings['list_id'])), true);
-        $this->log("List ID value: " . $settings['list_id'], true);
+        $this->log("Validating settings", true);
 
         if (empty($settings['api_url']) || empty($settings['api_key']) || empty($settings['list_id'])) {
-            $this->log("Missing configuration settings", true);
+            $this->log("Missing required settings");
             return false;
         }
         return true;
@@ -420,16 +393,16 @@ class WooToAC_Plugin
 
         $search_body = json_decode(wp_remote_retrieve_body($search_response), true);
 
-        $this->log("Search response: " . wp_json_encode($search_body));
-
         if (!is_wp_error($search_response) && isset($search_body['contacts'][0]['id'])) {
             $contact_id = $search_body['contacts'][0]['id'];
-            $this->log("Found existing contact with ID: " . $contact_id, true);
+            $this->log("Found contact ID: {$contact_id}", true);
             return $contact_id;
         }
 
         return null;
     }
+
+
     private function update_contact($contact_id, $contact_data)
     {
         $this->log("Starting update_contact function", true);
@@ -493,16 +466,7 @@ class WooToAC_Plugin
 
     private function add_contact_to_list($contact_id, $email)
     {
-        $this->log("TEST - Inside add_contact_to_list function", true);
-        die("TEST - Function called!");  // This will stop execution and prove our function is being called
-
-
-        $this->log("Starting add_contact_to_list function");
-
         $settings = get_option('woo_to_ac_settings');
-
-        $this->log("settings get_option: woo_to_ac_settings");
-
         $list_data = [
             'contactList' => [
                 'list' => $settings['list_id'],
@@ -510,50 +474,36 @@ class WooToAC_Plugin
                 'status' => 1
             ]
         ];
-        $this->log("List data prepared: " . wp_json_encode($list_data));
-
-        $args = [
-            'timeout' => 30,  // Increase timeout to 30 seconds
-            'headers' => [
-                'Api-Token' => $settings['api_key'],
-                'Content-Type' => 'application/json'
-            ],
-            'body' => json_encode($list_data)
-        ];
-
-
-        $this->log("About to make API call");
 
         try {
             $response = wp_remote_post(
                 $settings['api_url'] . '/api/3/contactLists',
-                $args
+                [
+                    'timeout' => 30,
+                    'headers' => [
+                        'Api-Token' => $settings['api_key'],
+                        'Content-Type' => 'application/json'
+                    ],
+                    'body' => json_encode($list_data)
+                ]
             );
 
-            $this->log("API call completed");
-
             if (is_wp_error($response)) {
-                $this->log("API call failed: " . $response->get_error_message(), true);
+                $this->log("Failed to add contact to list: " . $response->get_error_message());
                 return;
             }
 
             $response_code = wp_remote_retrieve_response_code($response);
-            $response_body = wp_remote_retrieve_body($response);
-
-            $this->log("Response code: " . $response_code);
-            $this->log("Response body: " . $response_body);
-
             if ($response_code !== 200 && $response_code !== 201) {
-                $this->log("Unexpected response code: " . $response_code, true);
+                $this->log("Failed to add contact - response code: {$response_code}");
                 return;
             }
 
-            $this->log("Successfully added {$email} to list", true);
+            $this->log("Added {$email} to list successfully", true);
         } catch (Exception $e) {
-            $this->log("Exception in add_contact_to_list: " . $e->getMessage(), true);
+            $this->log("Error adding contact to list: " . $e->getMessage());
         }
     }
-
     // Modify the log function to use verbose setting
     private function log($message, $verbose = false)
     {
@@ -620,14 +570,15 @@ add_action('plugins_loaded', function () {
 // Uninstall hook
 register_uninstall_hook(__FILE__, 'woo_to_ac_uninstall');
 
-function woo_to_ac_uninstall() {
+function woo_to_ac_uninstall()
+{
     // Clean up plugin options
     delete_option('woo_to_ac_settings');
-    
+
     // Clean up post meta
     global $wpdb;
     $wpdb->delete($wpdb->postmeta, array('meta_key' => '_ac_sync_processed'));
-    
+
     // Clear any scheduled hooks
     wp_clear_scheduled_hook('woo_to_ac_sync_cron');
 }
@@ -635,7 +586,8 @@ function woo_to_ac_uninstall() {
 // Deactivation hook
 register_deactivation_hook(__FILE__, 'woo_to_ac_deactivate');
 
-function woo_to_ac_deactivate() {
+function woo_to_ac_deactivate()
+{
     // Clear any scheduled hooks
     wp_clear_scheduled_hook('woo_to_ac_sync_cron');
 }
