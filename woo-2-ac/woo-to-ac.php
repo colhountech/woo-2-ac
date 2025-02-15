@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce to ActiveCampaign List Sync
 Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
-Version: 1.0.14
+Version: 1.0.15
 Author: Micheal Colhoun 
 */
 
@@ -340,10 +340,10 @@ class WooToAC_Plugin
             $contact_id = $this->find_existing_contact($contact_data['email']);
             $this->log("Contact lookup complete", true);
 
-            if ($contact_id) {
-                $this->log("=== STARTING CONTACT UPDATE ===", true);
-                $update_result = $this->update_contact($contact_id, $contact_data);
-                $this->log("Contact update complete. Result: " . ($update_result ? "success" : "failed"), true);
+             if ($contact_id) {
+            //     $this->log("=== STARTING CONTACT UPDATE ===", true);
+            //     $update_result = $this->update_contact($contact_id, $contact_data);
+            //     $this->log("Contact update complete. Result: " . ($update_result ? "success" : "failed"), true);
 
                 $this->log("=== STARTING LIST ADDITION ===", true);
                 $this->add_contact_to_list($contact_id, $contact_data['email']);
