@@ -298,6 +298,17 @@ class WooToAC_Plugin
             if (!$this->validate_settings()) {
                 return;
             }
+    
+            $contact_data = $this->get_contact_data_from_order($order_id);
+            $this->log("Got contact data: " . wp_json_encode($contact_data), true);
+            
+            $contact_id = $this->ensure_contact_exists($contact_data);
+            if ($contact_id) {
+                $this->add_contact_to_list($contact_id, $contact_data['email']);
+            } else {
+                $this->log("Failed to ensure contact exists");
+            }
+            
         } catch (Exception $e) {
             $this->log("Error in handle_order_complete: " . $e->getMessage());
         }
