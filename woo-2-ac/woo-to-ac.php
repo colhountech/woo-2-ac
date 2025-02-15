@@ -1,17 +1,26 @@
 <?php
-/*
-Plugin Name: WooCommerce to ActiveCampaign List Sync
-Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
-Version: 1.0.15
-Author: Micheal Colhoun 
-*/
+
+/**
+ * Plugin Name: WooCommerce to ActiveCampaign List Sync
+ * Plugin URI: 
+ * Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
+ * Version: 1.0.15
+ * Author: Micheal Colhoun
+ * Author URI: https://github.com/colhountech/wordpress/
+ * Text Domain: woo-to-ac
+ * Domain Path: /languages
+ * Requires at least: 5.8
+ * Requires PHP: 7.4
+ * WC requires at least: 5.0
+ * WC tested up to: 8.0
+ */
+
+
 
 // Prevent direct file access
-defined('ABSPATH') || exit;
-// Add after defined('ABSPATH') || exit;
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class WooToAC_Plugin
 {
@@ -606,3 +615,27 @@ add_action('plugins_loaded', function () {
 
     WooToAC_Plugin::get_instance();
 });
+
+
+// Uninstall hook
+register_uninstall_hook(__FILE__, 'woo_to_ac_uninstall');
+
+function woo_to_ac_uninstall() {
+    // Clean up plugin options
+    delete_option('woo_to_ac_settings');
+    
+    // Clean up post meta
+    global $wpdb;
+    $wpdb->delete($wpdb->postmeta, array('meta_key' => '_ac_sync_processed'));
+    
+    // Clear any scheduled hooks
+    wp_clear_scheduled_hook('woo_to_ac_sync_cron');
+}
+
+// Deactivation hook
+register_deactivation_hook(__FILE__, 'woo_to_ac_deactivate');
+
+function woo_to_ac_deactivate() {
+    // Clear any scheduled hooks
+    wp_clear_scheduled_hook('woo_to_ac_sync_cron');
+}
