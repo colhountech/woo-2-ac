@@ -319,36 +319,62 @@ class WooToAC_Plugin
 
     public function process_order($order_id)
     {
-        $this->log("Starting scheduled process for order {$order_id}", true);
+        $this->log("=== PROCESS ORDER START ===", true);
+        $this->log("Processing order ID: " . $order_id, true);
+        
         try {
             $settings = get_option('woo_to_ac_settings');
-            
+            $this->log("Settings check - Has URL: " . (!empty($settings['api_url'])), true);
+            $this->log("Settings check - Has Key: " . (!empty($settings['api_key'])), true);
+            $this->log("Settings check - List ID: " . $settings['list_id'], true);
+    
             if (!$this->validate_settings()) {
+                $this->log("!!! Settings validation failed", true);
                 return;
             }
+            $this->log("Settings validated successfully", true);
     
             $contact_data = $this->get_contact_data_from_order($order_id);
+            $this->log("Contact data retrieved: " . wp_json_encode($contact_data), true);
+            
             $contact_id = $this->find_existing_contact($contact_data['email']);
+            $this->log("Contact lookup complete", true);
             
             if ($contact_id) {
-                $this->update_contact($contact_id, $contact_data);
-                $this->add_contact_to_list($contact_id, $contact_data['email']);
+                $this->log("=== STARTING CONTACT UPDATE ===", true);
+                $update_result = $this->update_contact($contact_id, $contact_data);
+                $this->log("Contact update complete. Result: " . ($update_result ? "success" : "failed"), true);
                 
-                // Mark as processed
+                $this->log("=== STARTING LIST ADDITION ===", true);
+                $this->add_contact_to_list($contact_id, $contact_data['email']);
+                $this->log("=== LIST ADDITION COMPLETE ===", true);
+                
                 update_post_meta($order_id, '_ac_sync_processed', true);
-                $this->log("Completed processing order {$order_id}", true);
+                $this->log("Order marked as processed", true);
+            } else {
+                $this->log("!!! No contact ID found for email: " . $contact_data['email'], true);
             }
             
+            $this->log("=== PROCESS ORDER COMPLETE ===", true);
+            
         } catch (Exception $e) {
-            $this->log("Error processing order {$order_id}: " . $e->getMessage(), true);
+            $this->log("!!! ERROR in process_order: " . $e->getMessage(), true);
+            $this->log("Error stack trace: " . $e->getTraceAsString(), true);
         }
     }
+    
     
     private function validate_settings()
     {
         $settings = get_option('woo_to_ac_settings');
+        $this->log("Validating settings:", true);
+        $this->log("API URL exists: " . (!empty($settings['api_url'])), true);
+        $this->log("API Key exists: " . (!empty($settings['api_key'])), true);
+        $this->log("List ID exists: " . (!empty($settings['list_id'])), true);
+        $this->log("List ID value: " . $settings['list_id'], true);
+        
         if (empty($settings['api_url']) || empty($settings['api_key']) || empty($settings['list_id'])) {
-            $this->log("Missing configuration settings");
+            $this->log("Missing configuration settings", true);
             return false;
         }
         return true;
