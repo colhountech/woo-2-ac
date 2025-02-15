@@ -416,36 +416,48 @@ class WooToAC_Plugin
     }
 
     private function add_contact_to_list($contact_id, $email)
-    {
-        $settings = get_option('woo_to_ac_settings');
-        $list_data = [
-            'contactList' => [
-                'list' => $settings['list_id'],
-                'contact' => $contact_id,
-                'status' => 1
-            ]
-        ];
+{
+    $settings = get_option('woo_to_ac_settings');
+    $list_data = [
+        'contactList' => [
+            'list' => $settings['list_id'],
+            'contact' => $contact_id,
+            'status' => 1
+        ]
+    ];
 
-        $this->log("Attempting to add to list with data: " . wp_json_encode($list_data), true);
+    $this->log("List data for API: " . wp_json_encode($list_data), true);
+    $this->log("List API URL: " . $settings['api_url'] . '/api/3/contactLists', true);
 
-        $response = wp_remote_post(
-            $settings['api_url'] . '/api/3/contactLists',
-            [
-                'headers' => [
-                    'Api-Token' => $settings['api_key'],
-                    'Content-Type' => 'application/json'
-                ],
-                'body' => json_encode($list_data)
-            ]
-        );
+    $response = wp_remote_post(
+        $settings['api_url'] . '/api/3/contactLists',
+        [
+            'headers' => [
+                'Api-Token' => $settings['api_key'],
+                'Content-Type' => 'application/json'
+            ],
+            'body' => json_encode($list_data)
+        ]
+    );
 
-        if (is_wp_error($response)) {
-            $this->log("Failed to add contact to list: " . $response->get_error_message());
-            return;
-        }
+    $response_body = json_decode(wp_remote_retrieve_body($response), true);
+    $response_code = wp_remote_retrieve_response_code($response);
+    
+    $this->log("List add response code: " . $response_code, true);
+    $this->log("List add response: " . wp_json_encode($response_body), true);
 
-        $this->log("Successfully added {$email} to list");
+    if (is_wp_error($response)) {
+        $this->log("Failed to add contact to list: " . $response->get_error_message());
+        return;
     }
+
+    if ($response_code !== 200 && $response_code !== 201) {
+        $this->log("Failed to add contact to list. Status code: " . $response_code);
+        return;
+    }
+
+    $this->log("Successfully added {$email} to list {$settings['list_id']}", true);
+}
 
     // Modify the log function to use verbose setting
     private function log($message, $verbose = false)
