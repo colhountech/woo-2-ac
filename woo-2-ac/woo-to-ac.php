@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce to ActiveCampaign List Sync
 Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
-Version: 1.0.10
+Version: 1.0.13
 Author: Micheal Colhoun 
 */
 
@@ -31,14 +31,14 @@ class WooToAC_Plugin
     {
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
-        // Add this to the constructor
-        // add_action('woo_to_ac_process_order', [$this, 'process_order']);
-       // add_action('woocommerce_payment_complete_order_status', [$this, 'handle_order_complete'], 10, 2);
-        //add_action('woocommerce_payment_complete', [$this, 'handle_order_complete']);
 
+        // Order status change hook
         add_action('woocommerce_order_status_changed', [$this, 'handle_order_status_change'], 10, 4);
 
-        // Add AJAX handlers for admin
+        // Register the scheduled event handler - THIS WAS MISSING
+        add_action('woo_to_ac_process_order', [$this, 'process_order']);
+
+        // AJAX handlers
         add_action('wp_ajax_test_ac_connection', [$this, 'test_connection']);
         add_action('wp_ajax_get_ac_lists', [$this, 'get_lists']);
     }
@@ -300,59 +300,50 @@ class WooToAC_Plugin
         return $lists;
     }
     public function handle_order_status_change($order_id, $old_status, $new_status, $order)
-{
-    $this->log("Order status changed: Order {$order_id} from {$old_status} to {$new_status}", true);
-    
-    // Process when order moves to processing or completed
-    if ($new_status === 'processing' || $new_status === 'completed') {
-        $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
-        wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
-    }
-}
-
-
-    // Move all our processing code to this new function
-    public function process_order($order_id)
     {
-
-        try {
-            $settings = get_option('woo_to_ac_settings');
-            $this->log("Current settings: " . wp_json_encode([
-                'has_url' => !empty($settings['api_url']),
-                'has_key' => !empty($settings['api_key']),
-                'list_id' => $settings['list_id']
-            ]), true);
-
-            $contact_data = $this->get_contact_data_from_order($order_id);
-            $this->log("Got contact data: " . wp_json_encode($contact_data), true);
-
-            // Here's where we were missing the actual contact ID retrieval
-            $contact_id = $this->find_existing_contact($contact_data['email']);
-
-            if ($contact_id) {
-                $this->log("Using existing contact ID: " . $contact_id, true);
-                // Update the contact info
-                $this->update_contact($contact_id, $contact_data);
-            } else {
-                $contact_id = $this->create_new_contact($contact_data);
-                $this->log("Created new contact with ID: " . $contact_id, true);
-            }
-
-            $this->log("about to add contact to list", true);
-
-            if ($contact_id) {
-                $this->add_contact_to_list($contact_id, $contact_data['email']);
-            } else {
-                $this->log("No contact ID available to add to list");
-            }
-            $this->log("added contact to list", true);
-
-
-        } catch (Exception $e) {
-            $this->log("Error in handle_order_complete: " . $e->getMessage(), true);
+        $this->log("Order status changed: Order {$order_id} from {$old_status} to {$new_status}", true);
+        
+        // Add check to prevent duplicate processing
+        $processed = get_post_meta($order_id, '_ac_sync_processed', true);
+        if ($processed) {
+            $this->log("Order {$order_id} already processed for ActiveCampaign", true);
+            return;
+        }
+        
+        if ($new_status === 'processing' || $new_status === 'completed') {
+            $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
+            wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
         }
     }
 
+
+    public function process_order($order_id)
+    {
+        $this->log("Starting scheduled process for order {$order_id}", true);
+        try {
+            $settings = get_option('woo_to_ac_settings');
+            
+            if (!$this->validate_settings()) {
+                return;
+            }
+    
+            $contact_data = $this->get_contact_data_from_order($order_id);
+            $contact_id = $this->find_existing_contact($contact_data['email']);
+            
+            if ($contact_id) {
+                $this->update_contact($contact_id, $contact_data);
+                $this->add_contact_to_list($contact_id, $contact_data['email']);
+                
+                // Mark as processed
+                update_post_meta($order_id, '_ac_sync_processed', true);
+                $this->log("Completed processing order {$order_id}", true);
+            }
+            
+        } catch (Exception $e) {
+            $this->log("Error processing order {$order_id}: " . $e->getMessage(), true);
+        }
+    }
+    
     private function validate_settings()
     {
         $settings = get_option('woo_to_ac_settings');
@@ -393,7 +384,8 @@ class WooToAC_Plugin
         );
 
         $search_body = json_decode(wp_remote_retrieve_body($search_response), true);
-        $this->log("Search response: " . wp_json_encode($search_body), true);
+
+        $this->log("Search response: " . wp_json_encode($search_body));
 
         if (!is_wp_error($search_response) && isset($search_body['contacts'][0]['id'])) {
             $contact_id = $search_body['contacts'][0]['id'];
@@ -447,7 +439,7 @@ class WooToAC_Plugin
         $create_body = json_decode(wp_remote_retrieve_body($create_response), true);
         if (isset($create_body['contact']['id'])) {
             $contact_id = $create_body['contact']['id'];
-            $this->log("Created new contact with ID: " . $contact_id, true);
+            $this->log("Created new contact with ID: " . $contact_id);
             return $contact_id;
         }
 
@@ -456,11 +448,15 @@ class WooToAC_Plugin
 
     private function add_contact_to_list($contact_id, $email)
     {
-        $this->log("Starting add_contact_to_list function", true);
+        $this->log("TEST - Inside add_contact_to_list function", true);
+        die("TEST - Function called!");  // This will stop execution and prove our function is being called
+    
+
+        $this->log("Starting add_contact_to_list function");
 
         $settings = get_option('woo_to_ac_settings');
 
-        $this->log("settings get_option: woo_to_ac_settings", true);
+        $this->log("settings get_option: woo_to_ac_settings");
 
         $list_data = [
             'contactList' => [
@@ -469,7 +465,7 @@ class WooToAC_Plugin
                 'status' => 1
             ]
         ];
-        $this->log("List data prepared: " . wp_json_encode($list_data), true);
+        $this->log("List data prepared: " . wp_json_encode($list_data));
 
         $args = [
             'timeout' => 30,  // Increase timeout to 30 seconds
@@ -481,7 +477,7 @@ class WooToAC_Plugin
         ];
 
 
-        $this->log("About to make API call", true);
+        $this->log("About to make API call");
 
         try {
             $response = wp_remote_post(
@@ -489,7 +485,7 @@ class WooToAC_Plugin
                 $args
             );
 
-            $this->log("API call completed", true);
+            $this->log("API call completed");
 
             if (is_wp_error($response)) {
                 $this->log("API call failed: " . $response->get_error_message(), true);
@@ -499,8 +495,8 @@ class WooToAC_Plugin
             $response_code = wp_remote_retrieve_response_code($response);
             $response_body = wp_remote_retrieve_body($response);
 
-            $this->log("Response code: " . $response_code, true);
-            $this->log("Response body: " . $response_body, true);
+            $this->log("Response code: " . $response_code);
+            $this->log("Response body: " . $response_body);
 
             if ($response_code !== 200 && $response_code !== 201) {
                 $this->log("Unexpected response code: " . $response_code, true);
