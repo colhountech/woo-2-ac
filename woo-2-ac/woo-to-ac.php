@@ -317,7 +317,7 @@ class WooToAC_Plugin
         }
 
         if ($new_status === 'processing' || $new_status === 'completed') {
-            $this->log("Scheduling sync for order {$order_id}");
+            $this->log("Scheduling sync for order {$order_id}", true);
             wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
         }
     }
@@ -325,7 +325,7 @@ class WooToAC_Plugin
 
     public function process_order($order_id)
     {
-        $this->log("Processing order: {$order_id}");
+        $this->log("Processing order: {$order_id}", true);
 
         try {
             if (!$this->validate_settings()) {
@@ -339,7 +339,7 @@ class WooToAC_Plugin
             if ($contact_id) {
                 $this->add_contact_to_list($contact_id, $contact_data['email']);
                 update_post_meta($order_id, '_ac_sync_processed', true);
-                $this->log("Order {$order_id} synced successfully");
+                $this->log("Order {$order_id} synced successfully", true);
             } else {
                 $this->log("No contact found for email: {$contact_data['email']}", true);
             }
@@ -499,7 +499,7 @@ class WooToAC_Plugin
                 return;
             }
 
-            $this->log("Added {$email} to list successfully", true);
+            $this->log("Added {$email} to list successfully");
         } catch (Exception $e) {
             $this->log("Error adding contact to list: " . $e->getMessage());
         }
