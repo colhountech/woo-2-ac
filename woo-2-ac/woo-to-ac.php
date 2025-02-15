@@ -32,10 +32,11 @@ class WooToAC_Plugin
         add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
         // Add this to the constructor
-        add_action('woo_to_ac_process_order', [$this, 'process_order']);
-
-        add_action('woocommerce_payment_complete_order_status', [$this, 'handle_order_complete'], 10, 2);
+        // add_action('woo_to_ac_process_order', [$this, 'process_order']);
+       // add_action('woocommerce_payment_complete_order_status', [$this, 'handle_order_complete'], 10, 2);
         //add_action('woocommerce_payment_complete', [$this, 'handle_order_complete']);
+
+        add_action('woocommerce_order_status_changed', [$this, 'handle_order_status_change'], 10, 4);
 
         // Add AJAX handlers for admin
         add_action('wp_ajax_test_ac_connection', [$this, 'test_connection']);
@@ -298,25 +299,16 @@ class WooToAC_Plugin
 
         return $lists;
     }
-    public function handle_order_complete($order_status, $order_id)
-    {
-        // Only process successful orders
-        if ($order_status !== 'completed' && $order_status !== 'processing') {
-            $this->log("Order {$order_id} status is {$order_status} - not processing", true);
-            return $order_status;
-        }
+    public function handle_order_status_change($order_id, $old_status, $new_status, $order)
+{
+    $this->log("Order status changed: Order {$order_id} from {$old_status} to {$new_status}", true);
     
-        $order = wc_get_order($order_id);
-        if (!$order || $order->get_payment_method() === 'stripe' && !$order->is_paid()) {
-            $this->log("Order {$order_id} is not paid - not processing", true);
-            return $order_status;
-        }
-    
+    // Process when order moves to processing or completed
+    if ($new_status === 'processing' || $new_status === 'completed') {
         $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
         wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
-    
-        return $order_status;
     }
+}
 
 
     // Move all our processing code to this new function
