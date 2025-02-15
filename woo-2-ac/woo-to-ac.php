@@ -4,7 +4,7 @@
  * Plugin Name: WooCommerce to ActiveCampaign List Sync
  * Plugin URI: 
  * Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
- * Version: 1.0.17
+ * Version: 1.0.18
  * Author: Micheal Colhoun
  * Author URI: https://github.com/colhountech/wordpress/
  * Text Domain: woo-to-ac
@@ -499,7 +499,7 @@ class WooToAC_Plugin
                 return;
             }
 
-            $this->log("Added {$email} to list successfully");
+            $this->log("Added {$email} to list {$settings['list_id']} successfully");
         } catch (Exception $e) {
             $this->log("Error adding contact to list: " . $e->getMessage());
         }
