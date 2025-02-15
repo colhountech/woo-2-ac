@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce to ActiveCampaign List Sync
 Description: Automatically adds customers to an ActiveCampaign list after WooCommerce purchase
-Version: 1.0.13
+Version: 1.0.14
 Author: Micheal Colhoun 
 */
 
@@ -302,14 +302,14 @@ class WooToAC_Plugin
     public function handle_order_status_change($order_id, $old_status, $new_status, $order)
     {
         $this->log("Order status changed: Order {$order_id} from {$old_status} to {$new_status}", true);
-        
+
         // Add check to prevent duplicate processing
         $processed = get_post_meta($order_id, '_ac_sync_processed', true);
         if ($processed) {
             $this->log("Order {$order_id} already processed for ActiveCampaign", true);
             return;
         }
-        
+
         if ($new_status === 'processing' || $new_status === 'completed') {
             $this->log("Scheduling ActiveCampaign sync for order {$order_id}", true);
             wp_schedule_single_event(time(), 'woo_to_ac_process_order', array($order_id));
@@ -321,49 +321,49 @@ class WooToAC_Plugin
     {
         $this->log("=== PROCESS ORDER START ===", true);
         $this->log("Processing order ID: " . $order_id, true);
-        
+
         try {
             $settings = get_option('woo_to_ac_settings');
             $this->log("Settings check - Has URL: " . (!empty($settings['api_url'])), true);
             $this->log("Settings check - Has Key: " . (!empty($settings['api_key'])), true);
             $this->log("Settings check - List ID: " . $settings['list_id'], true);
-    
+
             if (!$this->validate_settings()) {
                 $this->log("!!! Settings validation failed", true);
                 return;
             }
             $this->log("Settings validated successfully", true);
-    
+
             $contact_data = $this->get_contact_data_from_order($order_id);
             $this->log("Contact data retrieved: " . wp_json_encode($contact_data), true);
-            
+
             $contact_id = $this->find_existing_contact($contact_data['email']);
             $this->log("Contact lookup complete", true);
-            
+
             if ($contact_id) {
                 $this->log("=== STARTING CONTACT UPDATE ===", true);
                 $update_result = $this->update_contact($contact_id, $contact_data);
                 $this->log("Contact update complete. Result: " . ($update_result ? "success" : "failed"), true);
-                
+
                 $this->log("=== STARTING LIST ADDITION ===", true);
                 $this->add_contact_to_list($contact_id, $contact_data['email']);
                 $this->log("=== LIST ADDITION COMPLETE ===", true);
-                
+
                 update_post_meta($order_id, '_ac_sync_processed', true);
                 $this->log("Order marked as processed", true);
             } else {
                 $this->log("!!! No contact ID found for email: " . $contact_data['email'], true);
             }
-            
+
             $this->log("=== PROCESS ORDER COMPLETE ===", true);
-            
+
         } catch (Exception $e) {
             $this->log("!!! ERROR in process_order: " . $e->getMessage(), true);
             $this->log("Error stack trace: " . $e->getTraceAsString(), true);
         }
     }
-    
-    
+
+
     private function validate_settings()
     {
         $settings = get_option('woo_to_ac_settings');
@@ -372,7 +372,7 @@ class WooToAC_Plugin
         $this->log("API Key exists: " . (!empty($settings['api_key'])), true);
         $this->log("List ID exists: " . (!empty($settings['list_id'])), true);
         $this->log("List ID value: " . $settings['list_id'], true);
-        
+
         if (empty($settings['api_url']) || empty($settings['api_key']) || empty($settings['list_id'])) {
             $this->log("Missing configuration settings", true);
             return false;
@@ -423,7 +423,9 @@ class WooToAC_Plugin
     }
     private function update_contact($contact_id, $contact_data)
     {
+        $this->log("Starting update_contact function", true);
         $settings = get_option('woo_to_ac_settings');
+
         $update_response = wp_remote_put(
             $settings['api_url'] . '/api/3/contacts/' . $contact_id,
             [
@@ -435,14 +437,22 @@ class WooToAC_Plugin
             ]
         );
 
+        $this->log("Update API call completed", true);
+
         if (is_wp_error($update_response)) {
-            $this->log("Failed to update contact: " . $update_response->get_error_message());
-            return null;
+            $this->log("Failed to update contact: " . $update_response->get_error_message(), true);
+            return false;
         }
+
+        $response_code = wp_remote_retrieve_response_code($update_response);
+        $response_body = wp_remote_retrieve_body($update_response);
+
+        $this->log("Update response code: " . $response_code, true);
+        $this->log("Update response body: " . $response_body, true);
+        $this->log("Finishing update_contact function", true);
 
         return $contact_id;
     }
-
     private function create_new_contact($contact_data)
     {
         $settings = get_option('woo_to_ac_settings');
@@ -476,7 +486,7 @@ class WooToAC_Plugin
     {
         $this->log("TEST - Inside add_contact_to_list function", true);
         die("TEST - Function called!");  // This will stop execution and prove our function is being called
-    
+
 
         $this->log("Starting add_contact_to_list function");
 
